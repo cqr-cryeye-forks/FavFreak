@@ -61,8 +61,8 @@ def main():
         #         print("     " + k[:-12])
         # else:
         print("Hash: " + str(i))
-        # for k in j:
-            # print(k[:-12])
+        for k in j:
+            print(k[:-12])
 
     return a, urls
 
