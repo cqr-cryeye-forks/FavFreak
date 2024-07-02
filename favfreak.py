@@ -73,8 +73,10 @@ def parse_nmap_output(nmap_output: str) -> Dict[str, Any]:
     service_info_match = service_info_pattern.search(nmap_output)
     if service_info_match:
         for info in service_info_match.group(1).split(";"):
-            key, value = info.split(":")
-            results["service_info"][key.strip()] = value.strip()
+            key_value = info.split(":", 1)  # Split only on the first colon
+            if len(key_value) == 2:
+                key, value = key_value
+                results["service_info"][key.strip()] = value.strip()
 
     return results
 
