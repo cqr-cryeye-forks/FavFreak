@@ -12,59 +12,65 @@ import sys
 import json
 from os import path
 
-fingerprint = {}
-with open("finger.json") as jsonFile:
-    fingerprint = json.load(jsonFile)
-    jsonFile.close()
+
+def load_fingerprints(filepath: str) -> dict:
+    with open(filepath) as jsonFile:
+        return json.load(jsonFile)
 
 
-def main():
-    urls = []
-    c = 0
+def fetch_url(url: str, ctx: ssl.SSLContext, a: dict) -> tuple[str, int | None, Exception | None]:
+    try:
+        response = urlopen(url, timeout=5, context=ctx)
+        favicon = codecs.encode(response.read(), "base64")
+        hash_value = mmh3.hash(favicon)
+        a.setdefault(hash_value, []).append(url)
+        return url, hash_value, None
+    except Exception as e:
+        return url, None, e
+
+
+def main() -> tuple[dict, list[str]]:
+    urls = [line.strip() + ("/favicon.ico" if line.strip()[-1] != "/" else "favicon.ico") for line in sys.stdin]
     a = {}
-    for line in sys.stdin:
-        if line.strip()[-1] == "/":
-            urls.append(line.strip() + "favicon.ico")
-        else:
-            urls.append(line.strip() + "/favicon.ico")
 
-    def fetch_url(url):
-        try:
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            response = urlopen(url, timeout=5, context=ctx)
-            favicon = codecs.encode(response.read(), "base64")
-            hash = mmh3.hash(favicon)
-            key = hash
-            a.setdefault(key, [])
-            a[key].append(url)
-
-            return url, hash, None
-        except Exception as e:
-            return url, None, e
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
 
     start = timer()
-    results = ThreadPool(20).imap_unordered(fetch_url, urls)
-    for url, hash, error in results:
-        if error is None:
-            print("Fetched %s" % str(url[:-12]))
-        else:
-            print("Not Fetched %r " % (url[:-12]))
-    # print("\n")
-    # print("-------------------------------------------------------------------")
-    # print("Favicon Hash Results")
-    for i, j in a.items():
-        # if len(j) > 1:
-        #     print("Hash + str(i))
-        #     for k in j:
-        #         print("     " + k[:-12])
-        # else:
-        print("Hash: " + str(i))
-        for k in j:
-            print(f'^^^{k[:-12]}')
+    with ThreadPool(20) as pool:
+        results = pool.imap_unordered(lambda url: fetch_url(url, ctx, a), urls)
+        for url, hash_value, error in results:
+            if error is None:
+                print(f"Fetched {url[:-12]}")
+            else:
+                print(f"Not Fetched {url[:-12]}")
+
+    for hash_value, url_list in a.items():
+        print(f"Hash: {hash_value}")
+        for url in url_list:
+            print(f'^^^{url[:-12]}')
 
     return a, urls
+
+
+def save_results(a: dict, fingerprint: dict, output: str | None, shodan: bool) -> None:
+    if output:
+        for hash_value, urls in a.items():
+            filename = path.join(output, f"{hash_value}.txt")
+            os.makedirs(path.dirname(filename), exist_ok=True)
+            with open(filename, "w") as f:
+                f.write('\n'.join(urls) + "\n")
+
+    for hash_value in a.keys():
+        if str(hash_value) in fingerprint:
+            print(f'{fingerprint[str(hash_value)]}: {hash_value}')
+
+    if shodan:
+        print("[Shodan Dorks]")
+        for hash_value in a.keys():
+            if hash_value != 0:
+                print(f"[DORK] http.favicon.hash:{hash_value}")
 
 
 if __name__ == "__main__":
@@ -73,46 +79,12 @@ if __name__ == "__main__":
         parser.add_argument('-o', '--output', help='Output file name')
         parser.add_argument('--shodan', help='Prints Shodan Dorks', action='store_true')
         args = parser.parse_args()
+
         if os.name == 'nt':
             os.system('cls')
 
+        fingerprint = load_fingerprints("finger.json")
         a, urls = main()
-
-        # print("FingerPrint Based Detection Results")
-        for i in a.keys():
-            if str(i) in fingerprint.keys():
-                # print(fingerprint[i] + str(i) + " - count : " + str(len(a[i])))
-                print(f'{fingerprint[str(i)]}: {i}')
-                # print('\n'.join(a[i][:-12]))
-                # if len(a[i]) > 0:
-                    # for k in a[i]:
-                    #     print("     " + k[:-12])
-
-        # print("\n")
-        if args.shodan:
-            print("[Shodan Dorks]")
-            for i in a.keys():
-                if i != 0:
-                    print("[DORK] http.favicon.hash:" + str(i))
-
-        if args.output:
-            for i in a.keys():
-                filename = args.output + "/" + str(i) + ".txt"
-                if path.exists(filename):
-                    os.remove(filename)
-                if not os.path.exists(os.path.dirname(filename)):
-                    try:
-                        os.makedirs(os.path.dirname(filename))
-                    except OSError as exc:
-                        if exc.errno != errno.EEXIST:
-                            raise
-
-                with open(filename, "a") as f:
-                    f.write('\n'.join(a[i]))
-                    f.write("\n")
-        # print("Summary")
-        # print("Hash")
-        # for i in a.keys():
-        #     print(f"{len(a[i])}: {i}")
+        save_results(a, fingerprint, args.output, args.shodan)
     except KeyboardInterrupt:
-        print("KeyBoard Interrupt Encountered")
+        print("Keyboard Interrupt Encountered")
