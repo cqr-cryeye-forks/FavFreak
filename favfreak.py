@@ -55,12 +55,21 @@ def main() -> tuple[dict, list[str]]:
 
 
 def save_results(a: dict, fingerprint: dict, output: str | None, shodan: bool) -> None:
+    results = {
+        "fingerprints": {},
+        "shodan_dorks": []
+    }
+
+    for hash_value, urls in a.items():
+        results["fingerprints"][hash_value] = urls
+        if shodan and hash_value != 0:
+            results["shodan_dorks"].append(f"http.favicon.hash:{hash_value}")
+
     if output:
-        for hash_value, urls in a.items():
-            filename = path.join(output, f"{hash_value}.txt")
-            os.makedirs(path.dirname(filename), exist_ok=True)
-            with open(filename, "w") as f:
-                f.write('\n'.join(urls) + "\n")
+        output_fullpath = path.join(output, "results.json")
+        os.makedirs(path.dirname(output_fullpath), exist_ok=True)
+        with open(output_fullpath, "w") as jf:
+            json.dump(results, jf, indent=2)
 
     for hash_value in a.keys():
         if str(hash_value) in fingerprint:
@@ -68,9 +77,8 @@ def save_results(a: dict, fingerprint: dict, output: str | None, shodan: bool) -
 
     if shodan:
         print("[Shodan Dorks]")
-        for hash_value in a.keys():
-            if hash_value != 0:
-                print(f"[DORK] http.favicon.hash:{hash_value}")
+        for dork in results["shodan_dorks"]:
+            print(f"[DORK] {dork}")
 
 
 if __name__ == "__main__":
