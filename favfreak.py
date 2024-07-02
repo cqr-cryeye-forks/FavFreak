@@ -26,25 +26,29 @@ def fetch_favicon(url: str, ctx: ssl.SSLContext) -> Tuple[str, int | None, Excep
         return url, None, e
 
 
-def scan_vulnerabilities(url: str) -> dict:
+def scan_vulnerabilities(domain: str) -> dict:
     try:
-        result = subprocess.run(["nmap", "-sV", url], capture_output=True, text=True)
-        return {"url": url, "nmap_output": result.stdout}
+        result = subprocess.run(["nmap", "-sV", domain], capture_output=True, text=True)
+        return {"domain": domain, "nmap_output": result.stdout}
     except Exception as e:
-        return {"url": url, "error": str(e)}
+        return {"domain": domain, "error": str(e)}
 
 
 def main(target_url: str, fingerprint: Dict[str, Any], output: pathlib.Path) -> None:
+    # Ensure URL starts with http:// or https://
+    if not target_url.startswith(("http://", "https://")):
+        target_url = "http://" + target_url
+
     # Ensure URL ends with "/favicon.ico"
-    if not target_url.endswith("/favicon.ico"):
-        target_url = target_url.rstrip("/") + "/favicon.ico"
+    favicon_url = target_url.rstrip("/") + "/favicon.ico"
+    domain = target_url.split("//")[-1].split("/")[0]
 
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
     # Fetch favicon and calculate hash
-    url, hash_value, error = fetch_favicon(target_url, ctx)
+    url, hash_value, error = fetch_favicon(favicon_url, ctx)
 
     results = {
         "target": target_url,
@@ -55,7 +59,7 @@ def main(target_url: str, fingerprint: Dict[str, Any], output: pathlib.Path) -> 
 
     if error is None:
         # Perform vulnerability scan if fetching favicon was successful
-        scan_result = scan_vulnerabilities(target_url.rstrip("/favicon.ico"))
+        scan_result = scan_vulnerabilities(domain)
         results["vulnerability_scan"] = scan_result
     else:
         results["error"] = str(error)
