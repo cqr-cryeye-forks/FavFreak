@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
-from multiprocessing.pool import ThreadPool
-from time import time as timer
+import pathlib
 from urllib.request import urlopen
 import argparse
 import codecs
 import mmh3
-import os
 import ssl
-import sys
 import json
-from os import path
-from typing import Tuple, Dict, List, Any
+import os
+import subprocess
+from typing import Dict, Any, Tuple, Final
 
 
 def load_fingerprints(filepath: str) -> Dict[str, Any]:
@@ -18,69 +16,69 @@ def load_fingerprints(filepath: str) -> Dict[str, Any]:
         return json.load(jsonFile)
 
 
-def fetch_url(url: str, ctx: ssl.SSLContext, a: Dict[int, List[str]]) -> Tuple[str, int | None, Exception | None]:
+def fetch_favicon(url: str, ctx: ssl.SSLContext) -> Tuple[str, int | None, Exception | None]:
     try:
         response = urlopen(url, timeout=5, context=ctx)
         favicon = codecs.encode(response.read(), "base64")
         hash_value = mmh3.hash(favicon)
-        a.setdefault(hash_value, []).append(url)
         return url, hash_value, None
     except Exception as e:
         return url, None, e
 
 
-def main() -> Tuple[Dict[int, List[str]], List[str]]:
-    urls = [line.strip() + ("/favicon.ico" if line.strip()[-1] != "/" else "favicon.ico") for line in sys.stdin]
-    a = {}
+def scan_vulnerabilities(url: str) -> dict:
+    try:
+        result = subprocess.run(["nmap", "-sV", url], capture_output=True, text=True)
+        return {"url": url, "nmap_output": result.stdout}
+    except Exception as e:
+        return {"url": url, "error": str(e)}
+
+
+def main(target_url: str, fingerprint: Dict[str, Any], output: pathlib.Path) -> None:
+    # Ensure URL ends with "/favicon.ico"
+    if not target_url.endswith("/favicon.ico"):
+        target_url = target_url.rstrip("/") + "/favicon.ico"
 
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
-    start = timer()
-    with ThreadPool(20) as pool:
-        results = pool.imap_unordered(lambda url: fetch_url(url, ctx, a), urls)
-        for url, hash_value, error in results:
-            pass  # Collecting results silently without printing
+    # Fetch favicon and calculate hash
+    url, hash_value, error = fetch_favicon(target_url, ctx)
 
-    return a, urls
-
-
-def save_results(a: Dict[int, List[str]], fingerprint: Dict[str, Any], output: str, shodan: bool) -> None:
     results = {
-        "fingerprints": {},
-        "shodan_dorks": [],
-        "fetch_results": []
+        "target": target_url,
+        "hash": hash_value,
+        "fingerprint": fingerprint.get(str(hash_value), "Unknown"),
+        "vulnerability_scan": {}
     }
 
-    for hash_value, urls in a.items():
-        results["fingerprints"][hash_value] = urls
-        results["fetch_results"].append({
-            "hash": hash_value,
-            "urls": [url[:-12] for url in urls],
-            "fingerprint": fingerprint.get(str(hash_value), "Unknown")
-        })
-        if shodan and hash_value != 0:
-            results["shodan_dorks"].append(f"http.favicon.hash:{hash_value}")
+    if error is None:
+        # Perform vulnerability scan if fetching favicon was successful
+        scan_result = scan_vulnerabilities(target_url.rstrip("/favicon.ico"))
+        results["vulnerability_scan"] = scan_result
+    else:
+        results["error"] = str(error)
 
-    output_fullpath = path.join(output, "results.json")
-    os.makedirs(path.dirname(output_fullpath), exist_ok=True)
-    with open(output_fullpath, "w") as jf:
+    with open(output, "w") as jf:
         json.dump(results, jf, indent=2)
 
 
 if __name__ == "__main__":
     try:
-        parser = argparse.ArgumentParser(description='FavFreak - a Favicon Hash based asset mapper')
-        parser.add_argument('-o', '--output', help='Output directory', required=True)
-        parser.add_argument('--shodan', help='Prints Shodan Dorks', action='store_true')
+        parser = argparse.ArgumentParser(
+            description='FavFreak - a Favicon Hash based asset mapper and vulnerability scanner')
+        parser.add_argument('--target', required=True, help='Target URL or domain to scan')
+        parser.add_argument('--output', required=True, help='Output JSON file')
         args = parser.parse_args()
 
         if os.name == 'nt':
             os.system('cls')
 
+        MAIN_DIR: Final[pathlib.Path] = pathlib.Path(__file__).parent
+        OUTPUT: Final[pathlib.Path] = MAIN_DIR / args.output
+
         fingerprint = load_fingerprints("finger.json")
-        a, urls = main()
-        save_results(a, fingerprint, args.output, args.shodan)
+        main(args.target, fingerprint, OUTPUT)
     except KeyboardInterrupt:
         print("Keyboard Interrupt Encountered")
