@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 from typing import Dict, Any, Tuple, Final
+import re
 
 
 def load_fingerprints(filepath: str) -> Dict[str, Any]:
@@ -34,6 +35,50 @@ def scan_vulnerabilities(domain: str) -> dict:
         return {"domain": domain, "error": str(e)}
 
 
+def parse_nmap_output(nmap_output: str) -> Dict[str, Any]:
+    results = {
+        "domain": "",
+        "ip_address": "",
+        "host_status": "",
+        "ports": [],
+        "service_info": {}
+    }
+
+    # Extract domain and IP address
+    domain_ip_pattern = re.compile(r'Nmap scan report for (.+) \(([\d\.]+)\)')
+    domain_ip_match = domain_ip_pattern.search(nmap_output)
+    if domain_ip_match:
+        results["domain"] = domain_ip_match.group(1)
+        results["ip_address"] = domain_ip_match.group(2)
+
+    # Extract host status
+    host_status_pattern = re.compile(r'Host is (.+) \(([\d\.]+)s latency\)')
+    host_status_match = host_status_pattern.search(nmap_output)
+    if host_status_match:
+        results["host_status"] = host_status_match.group(1)
+
+    # Extract ports and services
+    ports_pattern = re.compile(r'(\d+/tcp)\s+(\w+)\s+(\w+)\s+(.+)')
+    for port_match in ports_pattern.finditer(nmap_output):
+        port_info = {
+            "port": port_match.group(1),
+            "state": port_match.group(2),
+            "service": port_match.group(3),
+            "version": port_match.group(4)
+        }
+        results["ports"].append(port_info)
+
+    # Extract service info
+    service_info_pattern = re.compile(r'Service Info: (.+)')
+    service_info_match = service_info_pattern.search(nmap_output)
+    if service_info_match:
+        for info in service_info_match.group(1).split(";"):
+            key, value = info.split(":")
+            results["service_info"][key.strip()] = value.strip()
+
+    return results
+
+
 def main(target_url: str, fingerprint: Dict[str, Any], output: pathlib.Path) -> None:
     # Ensure URL starts with http:// or https://
     if not target_url.startswith(("http://", "https://")):
@@ -54,15 +99,17 @@ def main(target_url: str, fingerprint: Dict[str, Any], output: pathlib.Path) -> 
         "target": target_url,
         "hash": hash_value,
         "fingerprint": fingerprint.get(str(hash_value), "Unknown"),
-        "vulnerability_scan": {}
+        "vulnerability_scan": {},
+        "error": str(error) if error else None
     }
 
     if error is None:
         # Perform vulnerability scan if fetching favicon was successful
         scan_result = scan_vulnerabilities(domain)
-        results["vulnerability_scan"] = scan_result
-    else:
-        results["error"] = str(error)
+        if "nmap_output" in scan_result:
+            results["vulnerability_scan"] = parse_nmap_output(scan_result["nmap_output"])
+        else:
+            results["vulnerability_scan"] = scan_result
 
     with open(output, "w") as jf:
         json.dump(results, jf, indent=2)
